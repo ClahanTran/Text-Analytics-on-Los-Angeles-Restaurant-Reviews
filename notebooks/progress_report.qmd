@@ -1,0 +1,268 @@
+---
+title: "Text Analytics on Los Angeles Restaurant Reviews"
+subtitle: "Progress Report — Steps 1–3"
+author: "Clahan Tran, Abdullah Khan, Kristin Henry, Dane Alban"
+date: "June 24, 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    theme: cosmo
+    embed-resources: true
+    code-fold: true
+    fig-width: 9
+    fig-height: 5.5
+execute:
+  warning: false
+  message: false
+---
+
+::: {.callout-note}
+This report was generated using AI under general human direction. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
+
+<!--
+To indicate human review: Delete the line above about contents not being reviewed, and replace this comment with:
+The contents have been reviewed and validated by [Your Name], [Your Role] on [Date].
+-->
+:::
+
+## Dataset overview
+
+```{r}
+#| label: load-packages
+library(tidyverse)
+library(tidytext)
+library(textstem)
+library(textclean)
+library(wordcloud)
+library(RColorBrewer)
+library(scales)
+library(patchwork)
+```
+
+```{r}
+#| label: load-data
+DATA_PATH <- "../archive (1)/top 240 restaurants recommanded in los angeles 2.csv"
+
+reviews_raw <- read_csv(DATA_PATH, show_col_types = FALSE)
+```
+
+The dataset contains `{r} nrow(reviews_raw)` customer reviews across `{r} n_distinct(reviews_raw$RestaurantName)` unique restaurants in Los Angeles, sourced from Yelp. Each row represents a single review. The `{r} ncol(reviews_raw)` columns capture both structured metadata and free-text content:
+
+| Column | Type | Description |
+|---|---|---|
+| `Rank` | numeric | Restaurant rank (1–240) |
+| `RestaurantName` | text | Restaurant name |
+| `Comment` | text | Customer review text |
+| `CommentDate` | date | Date review was posted |
+| `Date` | date | Scrape date |
+| `Address` | text | Restaurant address |
+| `StarRating` | numeric | Restaurant average star rating |
+| `NumberOfReviews` | numeric | Total Yelp reviews for the restaurant |
+| `Style` | text | Cuisine type(s) |
+| `Price` | text | Price level (\$–\$\$\$\$) |
+
+```{r}
+#| label: dataset-overview
+date_range <- range(reviews_raw$CommentDate)
+rating_range <- range(reviews_raw$StarRating)
+
+missing_summary <- reviews_raw |>
+  summarise(across(everything(), ~sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "Column", values_to = "Missing") |>
+  filter(Missing > 0)
+```
+
+Reviews span from `{r} date_range[1]` to `{r} date_range[2]`, and restaurant star ratings range from `{r} rating_range[1]` to `{r} rating_range[2]`. Two columns contain missing values:
+
+```{r}
+#| label: missing-table
+missing_summary |>
+  mutate(
+    `% of Rows` = percent(Missing / nrow(reviews_raw), accuracy = 0.1)
+  ) |>
+  knitr::kable(caption = "Columns with missing values")
+```
+
+The `Price` column is missing for `{r} missing_summary |> filter(Column == "Price") |> pull(Missing)` rows (~27% of the dataset). This is a meaningful gap that affects any price-tier analysis; missing entries are imputed as `"Unknown"` for now and flagged as a challenge in section 6.
+
+## Preprocessing pipeline
+
+Text preprocessing was carried out in four stages to transform raw review text into analysis-ready tokens.
+
+**Stage 1 — Text normalization.** Each comment was lowercased, stripped of HTML tags (via `replace_html()`), and expanded from contracted forms (e.g., *don't* → *do not*) using `replace_contraction()`. A custom 22-entry slang dictionary resolved common abbreviations (e.g., *tbh* → *to be honest*, *gr8* → *great*).
+
+**Stage 2 — Punctuation and digit removal.** All non-alphabetic characters were replaced with spaces and multiple spaces collapsed, leaving only lowercase letter tokens.
+
+**Stage 3 — Tokenization and stop-word removal.** The cleaned text was split into individual tokens using `tidytext::unnest_tokens()`. Standard English stop words (from the `tidytext` built-in lexicon) were removed, along with tokens shorter than three characters and purely numeric strings.
+
+**Stage 4 — Lemmatization.** Each token was reduced to its dictionary base form using `textstem::lemmatize_words()` (e.g., *running* → *run*, *dishes* → *dish*), consolidating morphological variants to improve frequency counts and downstream modeling.
+
+```{r}
+#| label: preprocess
+slang_map <- c(
+  "\\bomg\\b"   = "oh my god",   "\\blol\\b"   = "laughing",
+  "\\btbh\\b"   = "to be honest","\\bimo\\b"   = "in my opinion",
+  "\\bimho\\b"  = "in my humble opinion",
+  "\\bbtw\\b"   = "by the way",  "\\bfav\\b"   = "favorite",
+  "\\bdef\\b"   = "definitely",  "\\bobs\\b"   = "obviously",
+  "\\bgr8\\b"   = "great",       "\\b4ever\\b" = "forever",
+  "\\bthx\\b"   = "thanks",      "\\btks\\b"   = "thanks",
+  "\\bu\\b"     = "you",         "\\bur\\b"    = "your",
+  "\\bw/\\b"    = "with",        "\\bw/o\\b"   = "without",
+  "\\bpls\\b"   = "please",      "\\bplz\\b"   = "please",
+  "\\bngl\\b"   = "not gonna lie","\\bsup\\b"  = "what is up"
+)
+
+reviews_clean <- reviews_raw |>
+  filter(!is.na(Comment)) |>
+  mutate(
+    comment_id      = row_number(),
+    Price           = replace_na(Price, "Unknown"),
+    text_clean      = str_to_lower(Comment),
+    text_clean      = replace_html(text_clean),
+    text_clean      = str_replace_all(text_clean, slang_map),
+    text_clean      = replace_contraction(text_clean),
+    text_clean      = str_replace_all(text_clean, "[^a-z\\s]", " "),
+    text_clean      = str_squish(text_clean),
+    review_length   = str_count(Comment, "\\S+"),
+    char_length     = nchar(Comment),
+    price_tier      = case_when(
+      Price == "$"    ~ "Budget",
+      Price == "$$"   ~ "Moderate",
+      Price == "$$$"  ~ "Upscale",
+      Price == "$$$$" ~ "Fine Dining",
+      TRUE            ~ "Unknown"
+    ),
+    sentiment_label = if_else(StarRating >= 4.0, "positive", "negative")
+  )
+
+data("stop_words")
+
+tokens_lemma <- reviews_clean |>
+  select(comment_id, RestaurantName, StarRating, price_tier,
+         sentiment_label, Price, Style, text_clean) |>
+  unnest_tokens(word, text_clean) |>
+  anti_join(stop_words, by = "word") |>
+  filter(nchar(word) > 2, !str_detect(word, "^\\d+$")) |>
+  mutate(word = lemmatize_words(word))
+```
+
+After preprocessing, the corpus contains `{r} nrow(tokens_lemma) |> format(big.mark=",")` tokens and `{r} n_distinct(tokens_lemma$word) |> format(big.mark=",")` unique lemmas.
+
+## Summary statistics
+
+```{r}
+#| label: summary-stats
+length_stats        <- summary(reviews_clean$review_length)
+reviews_per_restaurant <- reviews_clean |> count(RestaurantName)
+price_dist          <- reviews_clean |> count(price_tier, sort = TRUE)
+```
+
+The median review is `{r} median(reviews_clean$review_length)` words long, with a right-skewed distribution — most reviews are brief, but a small number exceed 150 words. The most-reviewed restaurant in the dataset has `{r} max(reviews_per_restaurant$n)` reviews; the median is `{r} median(reviews_per_restaurant$n)`.
+
+```{r}
+#| label: review-length-table
+tibble(
+  Statistic = c("Min", "Q1", "Median", "Mean", "Q3", "Max"),
+  `Words per review` = c(
+    min(reviews_clean$review_length),
+    quantile(reviews_clean$review_length, 0.25),
+    median(reviews_clean$review_length),
+    round(mean(reviews_clean$review_length), 1),
+    quantile(reviews_clean$review_length, 0.75),
+    max(reviews_clean$review_length)
+  )
+) |> knitr::kable(caption = "Review length summary (word count)")
+```
+
+```{r}
+#| label: price-tier-table
+price_dist |>
+  mutate(`% of Reviews` = percent(n / sum(n), accuracy = 0.1)) |>
+  rename(`Price Tier` = price_tier, Count = n) |>
+  knitr::kable(caption = "Reviews by price tier")
+```
+
+## Initial visualizations
+
+```{r}
+#| label: fig-eda-panel
+#| fig-cap: "EDA overview: review length distribution (top-left), star rating distribution per restaurant (top-right), reviews by price tier (bottom-left), and review word count by star rating (bottom-right)."
+#| fig-height: 7
+
+p1 <- reviews_clean |>
+  ggplot(aes(x = review_length)) +
+  geom_histogram(bins = 40, fill = "#4E79A7") +
+  scale_x_continuous(limits = c(0, 200)) +
+  labs(title = "Review length distribution",
+       x = "Words per review", y = "Count")
+
+p2 <- reviews_clean |>
+  distinct(RestaurantName, StarRating) |>
+  ggplot(aes(x = StarRating)) +
+  geom_histogram(bins = 20, fill = "#F28E2B") +
+  labs(title = "Star ratings (per restaurant)",
+       x = "Star rating", y = "Count")
+
+p3 <- reviews_clean |>
+  filter(price_tier != "Unknown") |>
+  count(price_tier) |>
+  mutate(price_tier = fct_reorder(price_tier, n)) |>
+  ggplot(aes(x = n, y = price_tier)) +
+  geom_col(fill = "#76B7B2") +
+  labs(title = "Reviews by price tier", x = "Count", y = NULL)
+
+p4 <- reviews_clean |>
+  ggplot(aes(x = factor(round(StarRating, 1)), y = review_length)) +
+  geom_boxplot(fill = "#E15759", outlier.size = 0.5) +
+  scale_y_continuous(limits = c(0, 150)) +
+  labs(title = "Review length vs. star rating",
+       x = "Star rating", y = "Word count")
+
+(p1 + p2) / (p3 + p4)
+```
+
+```{r}
+#| label: fig-top-words
+#| fig-cap: "Top 25 most frequent lemmatized terms across all reviews."
+tokens_lemma |>
+  count(word, sort = TRUE) |>
+  slice_head(n = 25) |>
+  ggplot(aes(x = n, y = fct_reorder(word, n))) +
+  geom_col(fill = "#4E79A7") +
+  labs(title = "Top 25 most frequent words (lemmatized)",
+       x = "Frequency", y = NULL)
+```
+
+```{r}
+#| label: fig-wordcloud
+#| fig-cap: "Word cloud of the 120 most frequent lemmatized terms across all reviews."
+#| fig-height: 5
+word_freq <- tokens_lemma |> count(word, sort = TRUE)
+
+set.seed(4821)
+wordcloud(
+  words        = word_freq$word,
+  freq         = word_freq$n,
+  max.words    = 120,
+  random.order = FALSE,
+  colors       = brewer.pal(8, "Dark2"),
+  scale        = c(4, 0.5)
+)
+```
+
+The most prominent terms — *food*, *service*, *time*, *delicious*, *love*, *dish* — confirm that reviews center on the core dimensions of a restaurant experience: food quality, service, and overall enjoyment. The frequent appearance of *wait*, *table*, and *reservation* hints that wait times and seating are recurring themes worth examining more closely in the sentiment and topic modeling stages.
+
+## Challenges encountered
+
+**Missing price data (~27%).** The `Price` column is absent for 636 of 2,381 rows. These records have been assigned an `"Unknown"` tier and retained in the corpus, but they will reduce the statistical power of any price-tier comparisons. A reasonable mitigation is to impute the modal price tier of the same restaurant where available, or to drop this group from price-stratified analyses.
+
+**Package version conflict (`rlang` / `tidymodels`).** On the current R 4.5.1 session, `tidymodels` requires `rlang >= 1.2.0`, while the version already loaded by the session is 1.1.6. Updating the locked DLL requires a full session restart. As a workaround, the ML modeling step (Step 9) will use `glmnet` and `ranger` directly until the environment is refreshed.
+
+**Right-skewed review lengths.** The distribution of review lengths is strongly right-skewed (median ~40 words, max > 500 words). Very short reviews contribute little signal for embedding or topic models, while very long reviews may dominate TF-IDF weights. A minimum word threshold (e.g., ≥ 10 tokens post-cleaning) will be applied in later steps.
+
+**Star rating compression.** Restaurant-level star ratings cluster tightly between 4.0 and 4.9. This narrow range will limit the sensitivity of regression models predicting ratings from text features, and may require treating the outcome as a binary or ordinal variable rather than continuous.
+
+**Cuisine style is multi-valued.** The `Style` column often contains multiple comma-separated genres (e.g., *"American (New), Cocktail Bars"*). Splitting and handling this field as a multi-label variable adds complexity to any category-stratified analysis.
+
