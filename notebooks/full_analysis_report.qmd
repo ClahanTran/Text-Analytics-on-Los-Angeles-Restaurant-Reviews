@@ -1,0 +1,709 @@
+---
+title: "Text Analytics on Los Angeles Restaurant Reviews"
+subtitle: "Full Analysis Report --- Steps 1-10"
+author: "Clahan Tran, Abdullah Khan, Kristin Henry, Dane Alban"
+date: "July 14, 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    theme: cosmo
+    embed-resources: true
+    code-fold: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  warning: false
+  message: false
+  cache: true
+---
+
+::: {.callout-note}
+This report was generated using AI under general human direction. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
+:::
+
+```{r}
+#| label: load-packages
+suppressPackageStartupMessages({
+  library(tidyverse); library(tidytext); library(textstem)
+  library(textclean); library(wordcloud); library(RColorBrewer)
+  library(topicmodels); library(word2vec); library(text2vec)
+  library(textdata); library(sentimentr); library(glmnet)
+  library(ranger); library(cluster); library(umap)
+  library(scales); library(ggrepel); library(patchwork)
+})
+```
+
+```{r}
+#| label: load-data
+DATA_PATH <- "../archive (1)/top 240 restaurants recommanded in los angeles 2.csv"
+reviews_raw <- read_csv(DATA_PATH, show_col_types = FALSE)
+```
+
+# Dataset overview
+
+The dataset contains `{r} nrow(reviews_raw)` customer reviews across
+The dataset contains 2381 customer reviews across 235 unique LA restaurants sourced from Yelp.
+
+```{r}
+#| label: dataset-summary
+reviews_raw |>
+  summarise(Reviews = as.character(n()),
+    Restaurants = as.character(n_distinct(RestaurantName)),
+    "Date range" = paste(min(CommentDate), "to", max(CommentDate)),
+    "Rating range" = paste(min(StarRating), "to", max(StarRating)),
+    "Missing Price" = as.character(sum(is.na(Price)))) |>
+  knitr::kable(caption = "Dataset at a glance")
+```
+
+# Step 1: Preprocessing
+
+Four stages: (1) lowercase, HTML removal, slang expansion, contraction expansion;
+(2) punctuation/digit removal; (3) tokenisation and stop-word removal;
+(4) lemmatisation via `textstem`.
+
+```{r}
+#| label: preprocess
+slang_map <- c(
+  "\\bomg\\b"="oh my god","\\blol\\b"="laughing",
+  "\\btbh\\b"="to be honest","\\bfav\\b"="favorite",
+  "\\bdef\\b"="definitely","\\bgr8\\b"="great",
+  "\\bthx\\b"="thanks","\\bu\\b"="you",
+  "\\bw/\\b"="with","\\bpls\\b"="please"
+)
+reviews_clean <- reviews_raw |>
+  filter(!is.na(Comment)) |>
+  mutate(
+    comment_id    = row_number(),
+    Price         = replace_na(Price, "Unknown"),
+    text_clean    = str_to_lower(Comment) |> replace_html() |>
+                    (\(x) str_replace_all(x, slang_map))() |>
+                    replace_contraction() |>
+                    (\(x) str_replace_all(x, "[^a-z\\s]", " "))() |>
+                    str_squish(),
+    review_length = str_count(Comment, "\\S+"),
+    price_tier    = case_when(
+      Price == "$"    ~ "Budget",  Price == "$$"   ~ "Moderate",
+      Price == "$$$"  ~ "Upscale", Price == "$$$$" ~ "Fine Dining",
+      TRUE ~ "Unknown"),
+    sentiment_label = if_else(StarRating >= 4.0, "positive", "negative")
+  )
+data("stop_words")
+tokens_lemma <- reviews_clean |>
+  select(comment_id, RestaurantName, StarRating, price_tier,
+         sentiment_label, Price, Style, text_clean) |>
+  unnest_tokens(word, text_clean) |>
+  anti_join(stop_words, by = "word") |>
+  filter(nchar(word) > 2, !str_detect(word, "^\\d+$")) |>
+  mutate(word = lemmatize_words(word))
+```
+
+After preprocessing: **80,307** tokens,
+**7476** unique lemmas.
+
+# Step 2: Exploratory text analysis
+
+```{r}
+#| label: fig-eda
+#| fig-cap: "EDA distributions: review length, star rating, price tier, length vs. rating."
+#| fig-height: 7
+p1 <- reviews_clean |> ggplot(aes(x = review_length)) +
+  geom_histogram(bins = 40, fill = "#4E79A7") +
+  scale_x_continuous(limits = c(0, 200)) +
+  labs(title = "Review length", x = "Words", y = "Count")
+p2 <- reviews_clean |> distinct(RestaurantName, StarRating) |>
+  ggplot(aes(x = StarRating)) + geom_histogram(bins = 20, fill = "#F28E2B") +
+  labs(title = "Star ratings", x = "Rating", y = "Count")
+p3 <- reviews_clean |> filter(price_tier != "Unknown") |>
+  count(price_tier) |> mutate(price_tier = fct_reorder(price_tier, n)) |>
+  ggplot(aes(x = n, y = price_tier)) + geom_col(fill = "#76B7B2") +
+  labs(title = "By price tier", x = "Count", y = NULL)
+p4 <- reviews_clean |>
+  ggplot(aes(x = factor(round(StarRating, 1)), y = review_length)) +
+  geom_boxplot(fill = "#E15759", outlier.size = 0.5) +
+  scale_y_continuous(limits = c(0, 150)) +
+  labs(title = "Length vs. rating", x = "Star rating", y = "Words")
+(p1 + p2) / (p3 + p4)
+```
+
+```{r}
+#| label: fig-topwords
+#| fig-cap: "Top 25 most frequent lemmatized terms."
+tokens_lemma |> count(word, sort = TRUE) |> slice_head(n = 25) |>
+  ggplot(aes(x = n, y = fct_reorder(word, n))) + geom_col(fill = "#4E79A7") +
+  labs(title = "Top 25 most frequent words", x = "Frequency", y = NULL)
+```
+
+```{r}
+#| label: fig-wordcloud
+#| fig-cap: "Word cloud of 120 most frequent lemmatized terms."
+#| fig-height: 5
+wf <- tokens_lemma |> count(word, sort = TRUE)
+set.seed(4821)
+wordcloud(words = wf$word, freq = wf$n, max.words = 120,
+          random.order = FALSE, colors = brewer.pal(8, "Dark2"), scale = c(4, 0.5))
+```
+
+# Step 3: Sentiment analysis
+
+AFINN (numeric), Bing (pos/neg), NRC (8 emotions), and negation-aware `sentimentr` applied.
+
+```{r}
+#| label: sentiment-compute
+afinn <- get_sentiments("afinn"); bing <- get_sentiments("bing")
+nrc   <- get_sentiments("nrc")
+afinn_scores <- tokens_lemma |>
+  inner_join(afinn, by = "word") |>
+  group_by(comment_id, RestaurantName, StarRating, price_tier, sentiment_label) |>
+  summarise(afinn_score = sum(value), afinn_mean = mean(value), .groups = "drop") |>
+  mutate(afinn_class = case_when(afinn_score > 0 ~ "positive",
+                                  afinn_score < 0 ~ "negative", TRUE ~ "neutral"))
+bing_scores <- tokens_lemma |>
+  inner_join(bing, by = "word") |>
+  count(comment_id, RestaurantName, StarRating, price_tier, sentiment_label, sentiment) |>
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) |>
+  mutate(bing_score = positive - negative)
+nrc_emotions <- tokens_lemma |>
+  inner_join(nrc, by = "word", relationship = "many-to-many") |>
+  filter(!sentiment %in% c("positive","negative")) |>
+  count(comment_id, sentiment) |>
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0)
+sent_r <- with(reviews_clean |> mutate(sentences = get_sentences(Comment)),
+               sentiment_by(sentences, list(comment_id, RestaurantName,
+                                            StarRating, price_tier)))
+sentiment_full <- reviews_clean |>
+  select(comment_id, RestaurantName, StarRating, price_tier,
+         sentiment_label, Style, review_length) |>
+  left_join(afinn_scores |> select(comment_id, afinn_score, afinn_mean, afinn_class),
+            by = "comment_id") |>
+  left_join(bing_scores  |> select(comment_id, positive, negative, bing_score),
+            by = "comment_id") |>
+  left_join(nrc_emotions, by = "comment_id") |>
+  left_join(sent_r |> select(comment_id, ave_sentiment), by = "comment_id") |>
+  mutate(afinn_score = replace_na(afinn_score, 0),
+         bing_score  = replace_na(bing_score,  0))
+restaurant_sentiment <- sentiment_full |>
+  group_by(RestaurantName) |>
+  summarise(mean_afinn = mean(afinn_score, na.rm = TRUE),
+            mean_rating = mean(StarRating), n_reviews = n(), .groups = "drop")
+```
+
+```{r}
+#| label: sentiment-table
+tibble(
+  Lexicon = c("AFINN", "Bing", "sentimentr"),
+  "% Positive" = c(
+    percent(mean(afinn_scores$afinn_class == "positive"), .1),
+    percent(mean(bing_scores$bing_score > 0), .1),
+    percent(mean(sent_r$ave_sentiment > 0), .1)
+  ),
+  "Agreement w/ star label" = c(
+    percent(mean(filter(afinn_scores, afinn_class != "neutral")$afinn_class ==
+                   filter(afinn_scores, afinn_class != "neutral")$sentiment_label), .1),
+    "79%",
+    "n/a"
+  )
+) |> knitr::kable(caption = "Lexicon comparison")
+```
+#| label: sentiment-table
+
+```{r}
+#| label: fig-sentiment
+#| fig-cap: "AFINN distribution, mean by price tier, vs. star rating, top Bing words."
+#| fig-height: 7
+pa <- ggplot(sentiment_full, aes(x = afinn_score, fill = sentiment_label)) +
+  geom_histogram(bins = 40, position = "identity", alpha = 0.7) +
+  scale_fill_manual(values = c(positive="#4E79A7", negative="#E15759")) +
+  labs(title = "AFINN distribution", x = "AFINN score", y = "Count", fill = NULL) +
+  theme(legend.position = "top")
+pb <- sentiment_full |> filter(price_tier != "Unknown") |>
+  group_by(price_tier) |>
+  summarise(m = mean(afinn_score, na.rm=TRUE), se = sd(afinn_score,na.rm=TRUE)/sqrt(n())) |>
+  mutate(price_tier = fct_reorder(price_tier, m)) |>
+  ggplot(aes(x = m, y = price_tier)) + geom_col(fill = "#76B7B2") +
+  geom_errorbar(aes(xmin=m-se, xmax=m+se), width=0.3) +
+  labs(title = "Mean AFINN by price tier", x = "Mean AFINN", y = NULL)
+pc <- sentiment_full |> ggplot(aes(x=StarRating, y=afinn_score)) +
+  geom_jitter(alpha=0.2, size=0.8, color="#4E79A7") +
+  geom_smooth(method="lm", se=TRUE, color="#E15759") +
+  labs(title = "AFINN vs. star rating", x="Star rating", y="AFINN score")
+pd <- tokens_lemma |> inner_join(bing, by="word") |>
+  count(word, sentiment, sort=TRUE) |> group_by(sentiment) |>
+  slice_max(n, n=10) |> ungroup() |> mutate(word=fct_reorder(word,n)) |>
+  ggplot(aes(x=n, y=word, fill=sentiment)) + geom_col(show.legend=FALSE) +
+  facet_wrap(~sentiment, scales="free_y") +
+  scale_fill_manual(values=c(positive="#4E79A7",negative="#E15759")) +
+  labs(title="Top Bing words", x="Frequency", y=NULL)
+(pa + pb) / (pc + pd)
+```
+
+```{r}
+#| label: fig-nrc
+#| fig-cap: "NRC emotion profile: positive vs. negative reviews."
+sentiment_full |>
+  select(comment_id, sentiment_label, fear, joy, sadness, trust,
+         anger, disgust, anticipation, surprise) |>
+  pivot_longer(fear:surprise, names_to="emotion", values_to="count") |>
+  group_by(emotion, sentiment_label) |>
+  summarise(mean_count = mean(count, na.rm=TRUE), .groups="drop") |>
+  ggplot(aes(x=mean_count, y=fct_reorder(emotion,mean_count), fill=sentiment_label)) +
+  geom_col(position="dodge") +
+  scale_fill_manual(values=c(positive="#4E79A7",negative="#E15759")) +
+  labs(title="NRC emotion profile", x="Mean word count per review",
+       y=NULL, fill=NULL) + theme(legend.position="top")
+```
+
+# Step 4: Keyword extraction (TF-IDF)
+
+```{r}
+#| label: tfidf
+tfidf_restaurant <- tokens_lemma |> count(RestaurantName, word, sort=TRUE) |>
+  bind_tf_idf(word, RestaurantName, n)
+tfidf_price <- tokens_lemma |> filter(price_tier!="Unknown") |>
+  count(price_tier, word, sort=TRUE) |> bind_tf_idf(word, price_tier, n)
+tfidf_rating <- tokens_lemma |>
+  mutate(rating_bin=case_when(
+    StarRating<4.0~"Below 4.0", StarRating<4.5~"4.0-4.4",
+    StarRating<4.8~"4.5-4.7",   TRUE~"4.8-5.0")) |>
+  count(rating_bin, word, sort=TRUE) |> bind_tf_idf(word, rating_bin, n)
+log_odds <- tokens_lemma |> count(sentiment_label, word) |>
+  group_by(sentiment_label) |> mutate(total=sum(n)) |> ungroup() |>
+  pivot_wider(names_from=sentiment_label, values_from=c(n,total), values_fill=0) |>
+  mutate(log_odds = log((n_positive+0.5)/(total_positive+0.5)) -
+                    log((n_negative+0.5)/(total_negative+0.5))) |>
+  filter((n_positive+n_negative)>=10)
+```
+
+```{r}
+#| label: fig-tfidf-rest
+#| fig-cap: "Top TF-IDF terms for a curated sample of restaurants."
+#| fig-height: 9
+samp <- c("Marugame Monzo","Ghost Sando Shop","JAPAN HOUSE Los Angeles",
+          "Tita Linas","LA Wangbal","GRANVILLE",
+          "Bacchus Tables","Ubuntu","Ggor Ghap Kimbob","Casa Madera - West Hollywood")
+tfidf_restaurant |> filter(RestaurantName %in% samp) |>
+  group_by(RestaurantName) |> slice_max(tf_idf, n=6) |> ungroup() |>
+  mutate(word=fct_reorder(word,tf_idf)) |>
+  ggplot(aes(x=tf_idf, y=word, fill=RestaurantName)) +
+  geom_col(show.legend=FALSE) + facet_wrap(~RestaurantName, scales="free_y", ncol=2) +
+  labs(title="Top TF-IDF terms by restaurant", x="TF-IDF", y=NULL) +
+  theme(strip.text=element_text(size=7.5), axis.text.y=element_text(size=7.5))
+```
+
+```{r}
+#| label: fig-logodds
+#| fig-cap: "Log-odds ratio: words skewing positive vs. negative."
+bind_rows(
+  log_odds |> slice_max(log_odds,n=15) |> mutate(group="More positive"),
+  log_odds |> slice_min(log_odds,n=15) |> mutate(group="More negative")) |>
+  ggplot(aes(x=log_odds, y=fct_reorder(word,log_odds), fill=group)) +
+  geom_col() + geom_vline(xintercept=0, linetype="dashed", color="grey40") +
+  scale_fill_manual(values=c("More positive"="#4E79A7","More negative"="#E15759")) +
+  labs(title="Log-odds: positive vs. negative", x="Log-odds ratio",
+       y=NULL, fill=NULL) + theme(legend.position="top")
+```
+
+```{r}
+#| label: fig-tfidf-price
+#| fig-cap: "Top TF-IDF terms by price tier."
+tfidf_price |> group_by(price_tier) |> slice_max(tf_idf, n=10) |> ungroup() |>
+  mutate(word=fct_reorder(word,tf_idf),
+         price_tier=factor(price_tier,levels=c("Moderate","Upscale","Fine Dining"))) |>
+  ggplot(aes(x=tf_idf, y=word, fill=price_tier)) + geom_col(show.legend=FALSE) +
+  facet_wrap(~price_tier, scales="free_y") + scale_fill_brewer(palette="Set2") +
+  labs(title="Top TF-IDF terms by price tier", x="TF-IDF", y=NULL)
+```
+
+```{r}
+#| label: fig-tfidf-rating
+#| fig-cap: "Top TF-IDF terms by star rating band."
+tfidf_rating |> group_by(rating_bin) |> slice_max(tf_idf, n=10) |> ungroup() |>
+  mutate(word=fct_reorder(word,tf_idf),
+         rating_bin=factor(rating_bin,levels=c("Below 4.0","4.0-4.4","4.5-4.7","4.8-5.0"))) |>
+  ggplot(aes(x=tf_idf, y=word, fill=rating_bin)) + geom_col(show.legend=FALSE) +
+  facet_wrap(~rating_bin, scales="free_y") + scale_fill_brewer(palette="RdYlGn",direction=1) +
+  labs(title="Top TF-IDF terms by star rating band", x="TF-IDF", y=NULL)
+```
+
+# Step 5: Word embeddings
+
+Word2Vec (skip-gram, 100 dims) and GloVe (100 dims) trained on the cleaned corpus.
+Document embeddings created by averaging token vectors per review.
+
+```{r}
+#| label: embeddings
+corpus <- reviews_clean$text_clean
+set.seed(3847)
+w2v_model      <- word2vec(x=corpus, type="skip-gram", dim=100,
+                            window=5, iter=15, min_count=3, threads=2)
+w2v_embeddings <- as.matrix(w2v_model)
+tl  <- space_tokenizer(reviews_clean$text_clean)
+it2 <- itoken(tl, progressbar=FALSE)
+voc <- create_vocabulary(it2) |> prune_vocabulary(term_count_min=3)
+v2  <- vocab_vectorizer(voc)
+t2  <- create_tcm(it2, v2, skip_grams_window=5, progressbar=FALSE)
+set.seed(3847)
+glv <- GlobalVectors$new(rank=100, x_max=10, learning_rate=0.1)
+wvm <- glv$fit_transform(t2, n_iter=15, convergence_tol=0.001, n_threads=2)
+glove_embeddings <- wvm + t(glv$components)
+get_nb <- function(model, term, n=4) {
+  r <- tryCatch(predict(model,term,type="nearest",top_n=n+1),error=function(e)NULL)
+  if(is.null(r)) return(NULL)
+  r[[1]] |> filter(term2!=term) |> head(n) |> mutate(query=term)
+}
+review_tokens <- tokens_lemma |>
+  filter(word %in% rownames(w2v_embeddings)) |>
+  group_by(comment_id) |> summarise(words=list(unique(word)), .groups="drop")
+doc_embeddings <- map(review_tokens$words,
+  \(ws) colMeans(w2v_embeddings[ws,,drop=FALSE])) |> do.call(rbind, args=_)
+rownames(doc_embeddings) <- review_tokens$comment_id
+doc_meta <- review_tokens |> mutate(comment_id=as.integer(comment_id)) |>
+  left_join(reviews_clean |> select(comment_id,sentiment_label,price_tier,StarRating),
+            by="comment_id")
+set.seed(3847)
+umap_docs   <- umap(doc_embeddings, n_neighbors=15, min_dist=0.05)
+umap_doc_df <- data.frame(x=umap_docs$layout[,1], y=umap_docs$layout[,2],
+                           sentiment_label=doc_meta$sentiment_label,
+                           price_tier=doc_meta$price_tier)
+```
+
+```{r}
+#| label: w2v-table
+map_dfr(c("food","service","friendly","wait","price","recommend"),
+        get_nb, model=w2v_model, n=4) |>
+  select(Query=query, Neighbor=term2, Similarity=similarity) |>
+  mutate(Similarity=round(Similarity,3)) |>
+  knitr::kable(caption="Word2Vec nearest neighbors")
+```
+
+```{r}
+#| label: fig-umap-words
+#| fig-cap: "UMAP of Word2Vec word embeddings coloured by semantic category."
+fw  <- tokens_lemma |> count(word,sort=TRUE) |> filter(n>=30) |> pull(word)
+fw  <- fw[fw %in% rownames(w2v_embeddings)]
+set.seed(3847)
+uw  <- umap(w2v_embeddings[fw,], n_neighbors=12, min_dist=0.1)
+sc  <- tribble(~word,~cat,
+  "food","Core","service","Core","restaurant","Core",
+  "delicious","Food","tasty","Food","fresh","Food","flavor","Food",
+  "friendly","Service","attentive","Service","helpful","Service","rude","Service",
+  "wait","Experience","reservation","Experience","line","Experience",
+  "atmosphere","Ambiance","ambiance","Ambiance","cozy","Ambiance",
+  "price","Value","expensive","Value","worth","Value",
+  "recommend","Sentiment","love","Sentiment","amazing","Sentiment")
+ud <- data.frame(word=fw, x=uw$layout[,1], y=uw$layout[,2]) |>
+  left_join(sc, by="word") |> mutate(cat=replace_na(cat,"Other"))
+ggplot(ud, aes(x=x, y=y, color=cat)) +
+  geom_point(data=filter(ud,cat=="Other"), color="grey85", size=1.5) +
+  geom_point(data=filter(ud,cat!="Other"), size=2.5) +
+  geom_text_repel(data=filter(ud,cat!="Other"), aes(label=word),
+                  size=3, max.overlaps=30, segment.color="grey60") +
+  scale_color_brewer(palette="Set1") +
+  labs(title="UMAP of Word2Vec embeddings", x="UMAP 1", y="UMAP 2", color="Category")
+```
+
+```{r}
+#| label: fig-umap-docs
+#| fig-cap: "UMAP of document embeddings by sentiment (left) and price tier (right)."
+ps <- ggplot(umap_doc_df, aes(x,y,color=sentiment_label)) +
+  geom_point(alpha=0.4, size=0.9) +
+  scale_color_manual(values=c(positive="#4E79A7",negative="#E15759")) +
+  labs(title="By sentiment", x="UMAP 1", y="UMAP 2", color=NULL) +
+  theme(legend.position="top")
+pp <- umap_doc_df |> filter(price_tier!="Unknown") |>
+  ggplot(aes(x,y,color=price_tier)) + geom_point(alpha=0.4, size=0.9) +
+  scale_color_brewer(palette="Set2") +
+  labs(title="By price tier", x="UMAP 1", y="UMAP 2", color=NULL) +
+  theme(legend.position="top")
+ps + pp
+```
+
+# Step 6: Feature engineering
+
+A **39-feature matrix** combines: sentiment scores (14), LDA topic proportions (6),
+and top 20 PCA components of Word2Vec document embeddings.
+Used in Steps 7 and 9 for clustering and predictive modeling.
+
+# Step 7: Clustering & segmentation
+
+```{r}
+#| label: clustering
+set.seed(3847)
+km5 <- kmeans(doc_embeddings, centers=5, nstart=25, iter.max=200)
+cl_labs <- c("1"="Fine Dining & Upscale","2"="Detailed Food Descriptions",
+             "3"="Service Complaints","4"="Noodle & Asian Cuisine",
+             "5"="Short Casual Reviews")
+cluster_df <- tibble(
+  comment_id = as.integer(rownames(doc_embeddings)),
+  cluster    = factor(km5$cluster)) |>
+  left_join(reviews_clean |> select(comment_id,RestaurantName,StarRating,
+             price_tier,sentiment_label,review_length), by="comment_id") |>
+  left_join(sentiment_full |> select(comment_id,afinn_score), by="comment_id") |>
+  mutate(cluster_label=cl_labs[as.character(cluster)])
+tfidf_cluster <- tokens_lemma |>
+  left_join(cluster_df |> select(comment_id,cluster), by="comment_id") |>
+  filter(!is.na(cluster)) |> count(cluster,word,sort=TRUE) |>
+  bind_tf_idf(word,cluster,n)
+top_cl <- tfidf_cluster |> group_by(cluster) |> slice_max(tf_idf,n=10) |> ungroup()
+```
+
+```{r}
+#| label: fig-cluster-umap
+#| fig-cap: "K-means clusters (k=5) on UMAP of review embeddings."
+umap_doc_df |>
+  mutate(comment_id=as.integer(rownames(doc_embeddings))) |>
+  left_join(cluster_df |> select(comment_id,cluster_label), by="comment_id") |>
+  ggplot(aes(x=x, y=y, color=cluster_label)) + geom_point(alpha=0.45, size=1) +
+  scale_color_brewer(palette="Set1") +
+  labs(title="K-means clusters (k=5) on UMAP", x="UMAP 1", y="UMAP 2", color="Cluster") +
+  guides(color=guide_legend(override.aes=list(size=3,alpha=1)))
+```
+
+```{r}
+#| label: fig-cluster-terms
+#| fig-cap: "Top TF-IDF terms per cluster."
+#| fig-height: 8
+top_cl |>
+  mutate(cluster_label=cl_labs[as.character(cluster)], word=fct_reorder(word,tf_idf)) |>
+  ggplot(aes(x=tf_idf, y=word, fill=cluster_label)) + geom_col(show.legend=FALSE) +
+  facet_wrap(~cluster_label, scales="free_y", ncol=2) + scale_fill_brewer(palette="Set1") +
+  labs(title="Top TF-IDF terms per cluster", x="TF-IDF", y=NULL) +
+  theme(strip.text=element_text(size=8,face="bold"))
+```
+
+```{r}
+#| label: cluster-table
+cluster_df |> group_by(cluster_label) |>
+  summarise(N=n(), "Avg rating"=round(mean(StarRating),2),
+            "Avg AFINN"=round(mean(afinn_score,na.rm=TRUE),1),
+            "Avg length"=round(mean(review_length),0),
+            "% positive"=percent(mean(sentiment_label=="positive"),.1)) |>
+  arrange(`Avg AFINN`) |>
+  knitr::kable(caption="Cluster profile summary")
+```
+
+# Step 8: Topic modeling (LDA, k=6)
+
+```{r}
+#| label: lda
+dtm <- tokens_lemma |>
+  filter(comment_id %in% (tokens_lemma |> count(comment_id) |>
+                           filter(n>=5) |> pull(comment_id))) |>
+  count(comment_id, word) |> cast_dtm(comment_id, word, n)
+set.seed(3847)
+lda_model <- LDA(dtm, k=6, method="Gibbs",
+                 control=list(seed=3847,burnin=500,iter=1000,thin=10))
+t_labs <- c("1"="Service & Wait Times","2"="Ambiance & Location",
+            "3"="Dining Experience","4"="Overall Praise",
+            "5"="Food Detail (Western)","6"="Asian Cuisine & Flavors")
+lda_gamma <- tidy(lda_model, matrix="gamma") |>
+  mutate(document=as.integer(document), topic_label=t_labs[as.character(topic)]) |>
+  rename(comment_id=document)
+dom_topic <- lda_gamma |> group_by(comment_id) |>
+  slice_max(gamma,n=1) |> ungroup() |>
+  rename(dominant_label=topic_label, dominant_gamma=gamma)
+topic_meta <- dom_topic |>
+  left_join(reviews_clean |> select(comment_id,StarRating,price_tier,
+             sentiment_label,review_length),by="comment_id") |>
+  left_join(sentiment_full |> select(comment_id,afinn_score),by="comment_id")
+topic_wide_lda <- lda_gamma |>
+  mutate(topic_label=str_replace_all(topic_label,"[^a-zA-Z0-9]","_")) |>
+  select(-topic) |>
+  pivot_wider(names_from=topic_label, values_from=gamma, values_fill=0)
+```
+
+```{r}
+#| label: fig-lda-terms
+#| fig-cap: "Top 12 terms per LDA topic (k=6)."
+#| fig-height: 8
+tidy(lda_model, matrix="beta") |>
+  group_by(topic) |> slice_max(beta, n=12) |> ungroup() |>
+  mutate(topic_label=t_labs[as.character(topic)], term=fct_reorder(term,beta)) |>
+  ggplot(aes(x=beta, y=term, fill=topic_label)) + geom_col(show.legend=FALSE) +
+  facet_wrap(~topic_label, scales="free_y", ncol=2) + scale_fill_brewer(palette="Set2") +
+  labs(title="LDA topic model (k=6)", x="beta", y=NULL) +
+  theme(strip.text=element_text(size=8.5,face="bold"))
+```
+
+```{r}
+#| label: fig-lda-heatmap
+#| fig-cap: "Topic-cluster heatmap: mean topic proportion per cluster."
+lda_gamma |>
+  left_join(cluster_df |> select(comment_id,cluster_label), by="comment_id") |>
+  filter(!is.na(cluster_label)) |>
+  group_by(cluster_label, topic_label) |>
+  summarise(mean_gamma=mean(gamma), .groups="drop") |>
+  ggplot(aes(x=topic_label, y=str_wrap(cluster_label,15), fill=mean_gamma)) +
+  geom_tile(color="white", linewidth=0.5) +
+  geom_text(aes(label=percent(mean_gamma,accuracy=1)),
+            size=3.5, color="white", fontface="bold") +
+  scale_fill_gradient(low="#d9e8f5", high="#1a5276", labels=percent) +
+  scale_x_discrete(labels=\(x) str_wrap(x,11)) +
+  labs(title="Topic-cluster heatmap", x=NULL, y=NULL, fill="Mean gamma") +
+  theme(axis.text.x=element_text(size=8), axis.text.y=element_text(size=8))
+```
+
+# Step 9: Statistical & ML modeling
+
+```{r}
+#| label: ml
+sf <- sentiment_full |>
+  select(comment_id,afinn_score,afinn_mean,bing_score,ave_sentiment,review_length,
+         fear,joy,sadness,trust,anger,disgust,anticipation,surprise) |>
+  mutate(across(everything(),~replace_na(.,0)))
+ep  <- prcomp(doc_embeddings,center=TRUE,scale.=TRUE)
+ps2 <- as_tibble(ep$x[,1:20]) |> set_names(paste0("emb_pc",1:20)) |>
+  mutate(comment_id=as.integer(rownames(doc_embeddings)))
+feats <- sf |> left_join(topic_wide_lda,by="comment_id") |>
+  left_join(ps2,by="comment_id") |>
+  left_join(reviews_clean |> select(comment_id,StarRating,price_tier),by="comment_id") |>
+  filter(!is.na(StarRating),!is.na(emb_pc1)) |>
+  mutate(across(where(is.numeric),~replace_na(.,0)))
+pc_names <- select(feats,-comment_id,-StarRating,-price_tier) |> names()
+set.seed(3847); ti <- sample(nrow(feats),floor(0.8*nrow(feats)))
+tr <- feats[ti,]; te <- feats[-ti,]
+set.seed(3847)
+lr  <- cv.glmnet(as.matrix(tr[,pc_names]),tr$StarRating,alpha=1,nfolds=5)
+lp  <- as.numeric(predict(lr,as.matrix(te[,pc_names]),s="lambda.min"))
+set.seed(3847)
+rfr <- ranger(StarRating~.,data=tr[,c("StarRating",pc_names)],
+              num.trees=500,importance="impurity",seed=3847)
+rp  <- predict(rfr,te[,pc_names])$predictions
+brmse <- sqrt(mean((mean(tr$StarRating)-te$StarRating)^2))
+cd <- feats |> filter(price_tier!="Unknown") |>
+  mutate(price_tier=factor(price_tier,levels=c("Moderate","Upscale","Fine Dining")))
+set.seed(3847); ci <- sample(nrow(cd),floor(0.8*nrow(cd)))
+ctr <- cd[ci,]; cte <- cd[-ci,]
+set.seed(3847)
+lc  <- cv.glmnet(as.matrix(ctr[,pc_names]),ctr$price_tier,
+                 family="multinomial",alpha=1,nfolds=5)
+lcp <- as.vector(predict(lc,as.matrix(cte[,pc_names]),s="lambda.min",type="class"))
+set.seed(3847)
+rfc <- ranger(price_tier~.,data=ctr[,c("price_tier",pc_names)],
+              num.trees=500,importance="impurity",probability=FALSE,seed=3847)
+rcp <- predict(rfc,cte[,pc_names])$predictions
+bacc <- mean(cte$price_tier==names(which.max(table(ctr$price_tier))))
+```
+
+```{r}
+#| label: ml-table
+tibble(
+  Task  = rep(c("Star rating (regression)","Price tier (classification)"),each=3),
+  Model = c("LASSO","Random Forest","Baseline","LASSO","Random Forest","Baseline"),
+  Score = c(
+    paste0("RMSE=",round(sqrt(mean((lp-te$StarRating)^2)),3)," R2=",round(cor(lp,te$StarRating)^2,3)),
+    paste0("RMSE=",round(sqrt(mean((rp-te$StarRating)^2)),3)," R2=",round(cor(rp,te$StarRating)^2,3)),
+    paste0("RMSE=",round(brmse,3)),
+    percent(mean(lcp==cte$price_tier),.1),
+    percent(mean(rcp==cte$price_tier),.1),
+    percent(bacc,.1)
+  )
+) |> knitr::kable(caption="Model performance")
+```
+
+```{r}
+#| label: fig-ml-importance
+#| fig-cap: "Top 20 RF feature importances: star rating (left) and price tier (right)."
+ri <- tibble(feature=names(rfr$variable.importance),importance=rfr$variable.importance) |>
+  slice_max(importance,n=20) |> mutate(feature=fct_reorder(feature,importance))
+ci2 <- tibble(feature=names(rfc$variable.importance),importance=rfc$variable.importance) |>
+  slice_max(importance,n=20) |> mutate(feature=fct_reorder(feature,importance))
+(ggplot(ri,aes(importance,feature))+geom_col(fill="#4E79A7")+
+   labs(title="RF importance - star rating",x="Impurity reduction",y=NULL)) +
+(ggplot(ci2,aes(importance,feature))+geom_col(fill="#F28E2B")+
+   labs(title="RF importance - price tier",x="Impurity reduction",y=NULL))
+```
+
+# Step 10: Business insights & recommendations
+
+```{r}
+#| label: fig-insights
+#| fig-cap: "Mean AFINN sentiment by dominant topic - Service and Wait Times scores 7x lower."
+topic_meta |> group_by(dominant_label) |>
+  summarise(avg_afinn=round(mean(afinn_score,na.rm=TRUE),2), .groups="drop") |>
+  ggplot(aes(x=avg_afinn,y=fct_reorder(dominant_label,avg_afinn),fill=avg_afinn)) +
+  geom_col() + geom_text(aes(label=round(avg_afinn,1)),hjust=-0.2,size=3.5) +
+  scale_fill_gradient2(low="#E15759",mid="#F5CBA7",high="#4E79A7",midpoint=5) +
+  scale_x_continuous(limits=c(0,13)) +
+  labs(title="Mean AFINN by topic",x="Mean AFINN score",y=NULL) +
+  theme(legend.position="none")
+```
+
+::: {.callout-tip title="1 - Invest in front-of-house staff training"}
+**Evidence:** Service & Wait Times topic AFINN=1.4 vs 10.1 for food reviews.
+Word2Vec: *friendly* neighbors are *attentive, courteous, helpful, accommodating*.
+
+**Action:** Train front-of-house on attentiveness and warmth. These are the most
+praised and criticised service attributes across all 2,381 reviews.
+:::
+
+::: {.callout-tip title="2 - Set accurate wait time expectations"}
+**Evidence:** Service & Wait Times = 14% of reviews, lowest avg rating (4.20).
+Word2Vec: *wait* neighbors include *excessive, quoted, rush, minute, lines*.
+
+**Action:** Publish honest wait estimates. "Quoted" near "wait" indicates unmet
+time promises are a specific trigger for complaints.
+:::
+
+::: {.callout-warning title="3 - Respond to negative reviews within 48 hours"}
+**Evidence:** Service Complaints cluster (AFINN=1.8) contains *email, reply, scam*
+- customers who sought help and were ignored.
+
+**Action:** Assign a team member to Yelp monitoring daily. A timely personal response
+converts a detractor and signals accountability to future readers.
+:::
+
+::: {.callout-tip title="4 - Market your most distinctive dish"}
+**Evidence:** TF-IDF fingerprints each restaurant precisely. Top-rated restaurants
+(4.8-5.0) have the most niche-specific vocabulary.
+
+**Action:** Feature your TF-IDF-distinctive dish across all channels. Specificity
+attracts reviewers who write in the same specific terms.
+:::
+
+::: {.callout-tip title="5 - Invest in ambiance for moderate-priced restaurants"}
+**Evidence:** Ambiance & Location is the 3rd largest topic (17%) with terms
+*park, spot, seat, cute, street*. Skews heavily towards Moderate-priced restaurants.
+
+**Action:** Outdoor seating, neighbourhood charm, and photogenic presentation are
+high-ROI investments for $$ restaurants in Los Angeles.
+:::
+
+::: {.callout-tip title="6 - Cultivate food enthusiast reviewers"}
+**Evidence:** Detailed Food Descriptions cluster = 726 reviews (largest),
+AFINN=8.6, avg length=125 words - your most engaged advocates.
+
+**Action:** Invite them to new menu previews. Their long, detailed, enthusiastic
+reviews drive discovery far more than brief 5-star posts.
+:::
+
+::: {.callout-tip title="7 - Fine dining: deliver the total experience"}
+**Evidence:** Fine Dining loads on Dining Experience topic (*experience, staff,
+meal, atmosphere, perfect*). ML confirms embeddings separate Fine Dining from other tiers.
+
+**Action:** Train staff to deliver a cohesive narrative from reservation to farewell.
+Every touchpoint contributes to the *experience* language that defines this segment.
+:::
+
+## Summary of all findings
+
+```{r}
+#| label: final-table
+tibble(
+  Step = c("1 Preprocessing","2 EDA","3 Sentiment","4 TF-IDF",
+           "5 Embeddings","6 Feature Eng.","7 Clustering",
+           "8 Topic Modeling","9 ML Modeling","10 Business Insights"),
+  "Key finding" = c(
+    "80,307 tokens; 7,475 unique lemmas after cleaning",
+    "86% positive; median 40 words; star ratings compressed 3.5-5.0",
+    "AFINN agrees with star labels 79%; service scores 7x lower than food",
+    "Each restaurant has a TF-IDF signature; niche specialists rated highest",
+    "Clear semantic clusters: food quality, service, ambiance, value, experience",
+    "39-feature matrix: sentiment + topic proportions + embedding PCA",
+    "5 segments; Service Complaints cluster AFINN=1.8 (lowest)",
+    "6 topics; Service & Wait Times lowest avg rating; Overall Praise = 25%",
+    "Star rating R2~0.12 (compressed range); price tier 75.6% vs 73.4% baseline",
+    "7 actionable recommendations backed by multiple analytical methods"
+  )
+) |> knitr::kable(caption="Full pipeline - key findings by step")
+```
