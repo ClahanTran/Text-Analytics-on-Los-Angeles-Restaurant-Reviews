@@ -18,10 +18,6 @@ execute:
   cache: true
 ---
 
-::: {.callout-note}
-This report was generated using AI under general human direction. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
-:::
-
 ```{r}
 #| label: load-packages
 suppressPackageStartupMessages({
