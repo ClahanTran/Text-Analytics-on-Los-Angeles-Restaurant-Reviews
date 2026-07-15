@@ -32,7 +32,7 @@ suppressPackageStartupMessages({
 
 ```{r}
 #| label: load-data
-DATA_PATH <- "../archive (1)/top 240 restaurants recommanded in los angeles 2.csv"
+DATA_PATH <- "C:/Users/tranc/Downloads/Text-Analytics-on-Los-Angeles-Restaurant-Reviews/archive (1)/top 240 restaurants recommanded in los angeles 2.csv"
 reviews_raw <- read_csv(DATA_PATH, show_col_types = FALSE)
 ```
 
