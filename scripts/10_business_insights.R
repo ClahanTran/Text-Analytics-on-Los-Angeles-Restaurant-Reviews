@@ -2,6 +2,9 @@
 # Step 10: Business Insights & Recommendations
 # Text Analytics on Los Angeles Restaurant Reviews
 # =============================================================================
+# Load user configuration (DATA_PATH, RESULTS_DIR, SEED, model params)
+if (!exists('DATA_PATH')) source(file.path(getwd(), 'config.R'))
+
 # Requires: topic_meta, cluster_df, restaurant_sentiment, sentiment_full,
 #           tokens_lemma, lda_gamma from prior steps
 

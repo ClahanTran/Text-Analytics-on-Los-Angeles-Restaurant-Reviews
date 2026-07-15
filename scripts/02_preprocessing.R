@@ -2,6 +2,9 @@
 # Step 2: Text Preprocessing
 # Text Analytics on Los Angeles Restaurant Reviews
 # =============================================================================
+# Load user configuration (DATA_PATH, RESULTS_DIR, SEED, model params)
+if (!exists('DATA_PATH')) source(file.path(getwd(), 'config.R'))
+
 # Requires: reviews_raw loaded from 01_setup_load.R
 
 # Slang normalization dictionary
@@ -80,5 +83,6 @@ cat("Total tokens after cleaning:", nrow(tokens_lemma), "\n")
 cat("Unique lemmas:", n_distinct(tokens_lemma$word), "\n")
 
 # Save cleaned data for downstream steps
-# saveRDS(reviews_clean, "data/reviews_clean.rds")
-# saveRDS(tokens_lemma,  "data/tokens_lemma.rds")
+dir.create("data", showWarnings = FALSE)
+saveRDS(reviews_clean, "data/reviews_clean.rds")
+saveRDS(tokens_lemma,  "data/tokens_lemma.rds")

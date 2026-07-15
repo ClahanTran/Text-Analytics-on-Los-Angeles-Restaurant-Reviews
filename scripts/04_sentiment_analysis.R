@@ -2,6 +2,9 @@
 # Step 3: Sentiment Analysis
 # Text Analytics on Los Angeles Restaurant Reviews
 # =============================================================================
+# Load user configuration (DATA_PATH, RESULTS_DIR, SEED, model params)
+if (!exists('DATA_PATH')) source(file.path(getwd(), 'config.R'))
+
 # Requires: reviews_clean and tokens_lemma from 02_preprocessing.R
 
 suppressPackageStartupMessages({

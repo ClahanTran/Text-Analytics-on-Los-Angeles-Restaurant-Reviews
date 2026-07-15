@@ -1,13 +1,39 @@
-pandas==2.0.0
-numpy==1.24.0
-jupyter==1.0.0
-ipython==8.12.0
-matplotlib==3.7.0
-seaborn==0.12.0
-scikit-learn==1.2.0
-nltk==3.8.1
-textblob==0.17.1
-wordcloud==1.9.2
-plotnine==0.12.1
-polars==0.17.0
-gensim==4.3.1
+# R Package Dependencies
+# Text Analytics on Los Angeles Restaurant Reviews
+# ================================================
+# All packages are installed automatically by scripts/01_setup_load.R
+# Minimum R version: 4.1.0 (required for native pipe |>)
+# Tested on: R 4.5.1
+
+# Core data wrangling
+tidyverse    >= 2.0.0
+
+# Text analytics
+tidytext     >= 0.4.0
+textstem     >= 0.1.4
+textclean    >= 0.9.3
+textdata     >= 0.4.4
+tm           >= 0.7.0
+topicmodels  >= 0.2.0
+
+# Sentiment analysis
+sentimentr   >= 2.9.0
+
+# Word embeddings
+word2vec     >= 0.3.0
+text2vec     >= 0.6.0
+
+# Machine learning
+glmnet       >= 4.0.0
+ranger       >= 0.14.0
+
+# Dimensionality reduction & clustering
+umap         >= 0.2.0
+cluster      >= 2.1.0
+
+# Visualization
+wordcloud    >= 2.6
+RColorBrewer >= 1.1.0
+ggrepel      >= 0.9.0
+patchwork    >= 1.0.0
+scales       >= 1.2.0

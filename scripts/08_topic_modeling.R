@@ -2,6 +2,9 @@
 # Step 8: Topic Modeling (LDA, k = 6)
 # Text Analytics on Los Angeles Restaurant Reviews
 # =============================================================================
+# Load user configuration (DATA_PATH, RESULTS_DIR, SEED, model params)
+if (!exists('DATA_PATH')) source(file.path(getwd(), 'config.R'))
+
 # Requires: tokens_lemma, reviews_clean, sentiment_full, cluster_df
 
 suppressPackageStartupMessages({

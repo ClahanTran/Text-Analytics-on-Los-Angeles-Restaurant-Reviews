@@ -2,6 +2,9 @@
 # Step 1: Setup & Data Loading
 # Text Analytics on Los Angeles Restaurant Reviews
 # =============================================================================
+# Load user configuration (DATA_PATH, RESULTS_DIR, SEED, model params)
+if (!exists('DATA_PATH')) source(file.path(getwd(), 'config.R'))
+
 
 # Install any missing packages
 pkgs <- c(
@@ -45,7 +48,13 @@ suppressPackageStartupMessages({
 
 # Load data
 # Update DATA_PATH to wherever you have the CSV stored locally
-DATA_PATH <- "archive (1)/top 240 restaurants recommanded in los angeles 2.csv"
+# Validate data path (set in config.R)
+if (!file.exists(DATA_PATH)) {
+  stop(
+    "Data file not found:\n  ", DATA_PATH,
+    "\n\nPlease update DATA_PATH in config.R to point to your CSV file."
+  )
+}
 
 reviews_raw <- read_csv(DATA_PATH, show_col_types = FALSE)
 

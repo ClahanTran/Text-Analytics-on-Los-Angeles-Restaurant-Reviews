@@ -2,6 +2,9 @@
 # Step 9: Statistical / ML Modeling
 # Text Analytics on Los Angeles Restaurant Reviews
 # =============================================================================
+# Load user configuration (DATA_PATH, RESULTS_DIR, SEED, model params)
+if (!exists('DATA_PATH')) source(file.path(getwd(), 'config.R'))
+
 # Requires: sentiment_full, lda_gamma, doc_embeddings, reviews_clean,
 #           cluster_df from prior steps
 
