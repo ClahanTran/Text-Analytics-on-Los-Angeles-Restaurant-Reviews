@@ -39,3 +39,19 @@ results/*.html
 # Environment
 venv/
 env/
+
+# R artifacts
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# Raw data (user must supply locally — see README Step 2)
+archive*/
+
+# Quarto render cache and figure artifacts
+notebooks/*_cache/
+notebooks/*_files/
+
+# R package temp files
+*.tar.gz

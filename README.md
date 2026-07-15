@@ -1,46 +1,170 @@
 # Text Analytics on Los Angeles Restaurant Reviews
 
-## Project Overview
+A full text analytics pipeline applied to 2,381 Yelp reviews across 240 top-ranked
+Los Angeles restaurants. The project covers ten analytical steps from raw text
+preprocessing through machine-learning modeling and actionable business recommendations.
 
-This assignment focuses on performing text analytics and sentiment analysis on restaurant reviews from Los Angeles. The project explores natural language processing (NLP) techniques to extract insights from unstructured text data.
+**Team:** Clahan Tran, Abdullah Khan, Kristin Henry, Dane Alban  
+**Language:** R 4.5+  
+**Date:** July 2026
 
-## Project Structure
+---
 
-``
-+-- data/                    # Raw and processed data files
-+-- notebooks/              # Jupyter notebooks for analysis
-+-- results/                # Output files, visualizations, and reports
-+-- scripts/                # Python utility scripts
-+-- README.md              # This file
-+-- requirements.txt       # Python dependencies
-``
+## Repository structure
 
-Project Proposal: Text Analytics of Yelp Restaurant Reviews in Los Angeles 
+```
+.
+├── config.R                  # <-- Edit this first: set DATA_PATH for your machine
+├── run_all.R                 # Master script: runs all 10 steps in order
+├── scripts/
+|   ├── 01_setup_load.R       # Step 1  : Package installation & data loading
+|   ├── 02_preprocessing.R    # Step 2  : Text cleaning, tokenisation, lemmatisation
+|   ├── 03_eda.R              # Step 3  : Exploratory text analysis & word clouds
+|   ├── 04_sentiment_analysis.R # Step 4: AFINN / Bing / NRC / sentimentr
+|   ├── 05_keyword_extraction.R # Step 5: TF-IDF by restaurant, price tier, rating
+|   ├── 06_word_embeddings.R  # Step 6  : Word2Vec + GloVe embeddings, UMAP
+|   ├── 07_clustering.R       # Step 7  : K-means clustering (k=5) on embeddings
+|   ├── 08_topic_modeling.R   # Step 8  : LDA topic modeling (k=6)
+|   ├── 09_ml_modeling.R      # Step 9  : LASSO + Random Forest prediction
+|   └── 10_business_insights.R # Step 10: Findings & recommendations
+├── notebooks/
+|   ├── full_analysis_report.qmd   # Quarto source: all 10 steps
+|   ├── full_analysis_report.html  # Rendered HTML report
+|   ├── progress_report.qmd        # Quarto source: Steps 1-3 progress report
+|   └── progress_report.html       # Rendered HTML progress report
+├── results/                  # Auto-generated: plots and output files
+└── archive (1)/              # Raw data (not tracked by git -- see Data section)
+```
 
-Group Members: Clahan Tran, Abdullah Khan, Kristin Henry, Dane Alban
+---
 
-6/3/2026
+## Quickstart: reproducing the analysis
 
-Business question:
-The main business question for this project comes down to what are the key factors that are driving up customer satisfaction and dissatisfaction for restaurants that are highly recommended in Los Angeles, based on reviews from Yelp. Restaurant owners, marketers, and tourism boards, can utilize this information and data to better understand what the customer values the most when dining out. This project will identify and analyze customer comments to see which common themes such as: food quality, service, atmosphere, price, wait time, and overall experience. Our analysis would help restaurant managers understand what drives customer satisfaction. The goal is to turn the large amounts of unstructured text data into a clear and actionable business recommendation. 
+### 1. Clone the repository
 
-Relevance:
-Customer reviews are a valuable source of feedback especially for restaurants. As they show what customers are actually saying after their dining experience. However it can be difficult to manually read thousands of reviews. Instead text analytics allows restaurants to summarize review patterns in an efficient way. This can help them identify what areas they can improve upon, whether that be service, menu issues, or any pricing concerns. And for marketers they can use the analysis to highlight positive themes of the restaurant or business. For tourism boards, the finds can help identify what makes Los Angeles restaurants attractive to certain visitors, and which restaurants can create the best experience for customers. 
+```bash
+git clone https://github.com/ClahanTran/Text-Analytics-on-Los-Angeles-Restaurant-Reviews.git
+cd Text-Analytics-on-Los-Angeles-Restaurant-Reviews
+```
 
-Dataset description:
-	The data set we will use includes information on highly rated restaurants in the Los Angeles area. The information has been sourced from the Yelp reviews. The data includes identifying information including restaurant name, address, and date, as well as rating and review information including number of ratings, and average rating for each restaurant. The data also includes information about the restaurant's pricing and dining style. While the categorical data may provide insights, such as a restaurant's proximity to wealthy areas, preferred dining styles, affordability, etc. The primary information available in the data set are the text based reviews provided by the customers which we will clean, analyze and explore to determine the strengths and weaknesses of each business as these trends correspond to customer satisfaction. 
+### 2. Obtain the data
 
-Planned analysis approach (methods and tools):
-	This project will use text analytics in R to analyze yelp reviews and find out which factors contribute to customer satisfaction or dissatisfaction. We would have to clean the data of unnecessary words or characters. Then we would use text analysis to identify the most common and meaningful words that appear in the reviews. We can use visualization to create a summary for the data. We can also use sentiment analysis in which we measure the overall positive or negative tones of the reviews and we can compare star ratings, types of restaurants and price to see the customers opinions. Finally the review will be examined to find out recurring themes to the food quality. Atmosphere and wait times. With the graph we can help owners improve customer satisfaction and understand customer better.
+Download the dataset and place the CSV file anywhere on your machine.
+The file is named:
 
-Include a timeline with major milestones:
-Week 1: This is when we would understand the business problem, review the dataset, and define the main research question.
-Week 2: This is when we would clean the dataset, then remove any missing or unusable comments, this would prepare us for the text for analysis.
-Week 3: We would then conduct the exploratory text analysis, this would include word frequencies, TF-IDF and would also include visualizations to accompany the text analysis. 
-Week 4: We would then perform a sentiment analysis and compare the results with the star ratings, restaurant categories, and finally the price levels. 
-Week 5: We would then identify major themes in restaurants such as their food, service, ambiance, and value. We would create charts and finally summarize our key findings. 
-Week 6: Finally we would write our final report and develop a business recommendation for the restaurant manager and tourism marketer. 
+```
+top 240 restaurants recommanded in los angeles 2.csv
+```
 
-Expected Outcome:
-	Our final project will provide us with clear insights and information regarding what customers praise and have issues with in Los Angeles. The analysis will help inform restaurant managers understand what the biggest drivers of customer satisfaction are. This would also help inform marketers to see what the strongest selling points would be. 
+### 3. Configure the data path
 
+Open `config.R` and update `DATA_PATH` to point to the CSV on your machine:
+
+```r
+# config.R
+DATA_PATH <- "C:/path/to/your/data/top 240 restaurants recommanded in los angeles 2.csv"
+```
+
+All other settings (seed, model parameters, output directory) can also be
+adjusted in `config.R`.
+
+### 4. Run the full pipeline
+
+**Option A — one command (terminal):**
+```bash
+Rscript run_all.R
+```
+
+**Option B — interactive R session:**
+```r
+source('run_all.R')
+```
+
+**Option C — run individual steps:**
+```r
+source('config.R')          # always run this first
+source('scripts/01_setup_load.R')
+source('scripts/02_preprocessing.R')
+# ... etc.
+```
+
+Scripts must be run **in order** (01 → 10) because each step depends on
+objects created by prior steps.
+
+### 5. View the HTML report
+
+Open `notebooks/full_analysis_report.html` in any browser, or view it online:
+
+https://htmlpreview.github.io/?https://github.com/ClahanTran/Text-Analytics-on-Los-Angeles-Restaurant-Reviews/blob/main/notebooks/full_analysis_report.html
+
+---
+
+## R package dependencies
+
+All packages are installed automatically by `scripts/01_setup_load.R`.
+The table below lists them for reference.
+
+| Package | Purpose |
+|---------|---------|
+| `tidyverse` | Data wrangling and visualization |
+| `tidytext` | Text tokenisation and TF-IDF |
+| `textstem` | Lemmatisation |
+| `textclean` | HTML removal, contraction expansion |
+| `textdata` | Sentiment lexicons (AFINN, Bing, NRC) |
+| `sentimentr` | Negation-aware sentence sentiment |
+| `wordcloud` | Word cloud visualizations |
+| `topicmodels` | LDA topic modeling |
+| `tm` | Document-term matrix construction |
+| `word2vec` | Word2Vec embeddings |
+| `text2vec` | GloVe embeddings |
+| `umap` | Dimensionality reduction for visualization |
+| `cluster` | Silhouette scores for cluster evaluation |
+| `glmnet` | LASSO regression and classification |
+| `ranger` | Random forest modeling |
+| `patchwork` | Combining ggplot2 figures |
+| `ggrepel` | Non-overlapping plot labels |
+| `scales` | Formatting axes and labels |
+
+**R version:** 4.5.1 or later recommended.
+
+---
+
+## Pipeline overview
+
+| Step | Script | Description |
+|------|--------|-------------|
+| 1 | `01_setup_load.R` | Install packages, load data, check missingness |
+| 2 | `02_preprocessing.R` | Lowercase, HTML removal, slang normalization, stop-word removal, lemmatization |
+| 3 | `03_eda.R` | Word frequencies, review length distributions, word clouds |
+| 4 | `04_sentiment_analysis.R` | AFINN, Bing, NRC, sentimentr; aggregate by restaurant and price tier |
+| 5 | `05_keyword_extraction.R` | TF-IDF by restaurant, price tier, and rating band; log-odds ratio |
+| 6 | `06_word_embeddings.R` | Word2Vec + GloVe (100 dims); document embeddings; UMAP visualizations |
+| 7 | `07_clustering.R` | K-means (k=5) on document embeddings; cluster profiling |
+| 8 | `08_topic_modeling.R` | LDA (k=6) with perplexity selection; topic-cluster heatmap |
+| 9 | `09_ml_modeling.R` | LASSO + Random Forest: predict star rating and price tier |
+| 10 | `10_business_insights.R` | Evidence-backed recommendations for restaurant managers |
+
+---
+
+## Key findings
+
+- **86%** of reviews are AFINN-positive; AFINN agrees with star-rating labels **79%** of the time.
+- **Service & Wait Times** reviews score 7x lower in sentiment than food-focused reviews (AFINN 1.4 vs 10.1).
+- **Five review clusters** identified: Fine Dining & Upscale, Detailed Food Descriptions,
+  Service Complaints, Noodle & Asian Cuisine, Short Casual Reviews.
+- **Six LDA topics**: Overall Praise, Asian Cuisine & Flavors, Ambiance & Location,
+  Service & Wait Times, Dining Experience, Food Detail (Western).
+- Star rating prediction R² ≈ 0.12 (compressed rating range limits signal);
+  price tier classification: **75.6%** accuracy vs. 73.4% baseline.
+
+---
+
+## Notes
+
+- The `archive (1)/` data folder is listed in `.gitignore` and not tracked by git.
+  You must supply the CSV yourself (see Step 2 above).
+- The `results/` folder is also gitignored; plots are generated locally on each run.
+- Rendered HTML reports in `notebooks/` **are** tracked so collaborators can view
+  results without re-running the pipeline.
+- The `tidymodels` package is **not** used due to a namespace conflict with `rlang`
+  in the current session; `glmnet` and `ranger` are used directly instead.
